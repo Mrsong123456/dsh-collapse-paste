@@ -118,27 +118,6 @@ src/
     └── styles/           # 注入的 CSS
 ```
 
-## 发布到 GitHub
-
-仓库已按可直接推送的结构整理好（`lib/` 已提交，GitHub 安装无需构建）：
-
-```sh
-git init
-git add .
-git commit -m "feat: collapse multiline paste in composer and transcript"
-git branch -M main
-git remote add origin https://github.com/Mrsong123456/dsh-collapse-paste.git
-git push -u origin main
-```
-
-发布到 npm（可选）：
-
-```sh
-npm publish --access public
-```
-
-发布前把 `package.json` 里的 `author`、`contributors` 和仓库地址补成你自己的。
-
 ## 致谢
 
 - 原始实现：[`@comecaramelos/dsh-collapse-multiline-paste`](https://www.npmjs.com/package/@comecaramelos/dsh-collapse-multiline-paste)，作者 Robe ComeCaramelos，MIT；
