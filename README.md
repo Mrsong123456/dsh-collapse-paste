@@ -40,7 +40,7 @@ dsh plugin --profile desktop add dsh-collapse-paste
 从 GitHub：
 
 ```sh
-dsh plugin --profile desktop add github:<你的GitHub用户名>/dsh-collapse-paste
+dsh plugin --profile desktop add github:Mrsong123456/dsh-collapse-paste
 ```
 
 从本地目录：
@@ -127,7 +127,7 @@ git init
 git add .
 git commit -m "feat: collapse multiline paste in composer and transcript"
 git branch -M main
-git remote add origin https://github.com/<你的用户名>/dsh-collapse-paste.git
+git remote add origin https://github.com/Mrsong123456/dsh-collapse-paste.git
 git push -u origin main
 ```
 
