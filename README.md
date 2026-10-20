@@ -31,13 +31,15 @@
 
 ## 安装
 
-从 npm：
+最简单（npm，一条命令，不需要构建）：
 
 ```sh
 dsh plugin --profile desktop add dsh-collapse-paste
 ```
 
-从 GitHub：
+其他方式：
+
+从 GitHub（源码，含已构建的 `lib/`）：
 
 ```sh
 dsh plugin --profile desktop add github:Mrsong123456/dsh-collapse-paste
