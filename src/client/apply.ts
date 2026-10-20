@@ -80,14 +80,14 @@ export function apply(ctx: PluginContext): void {
             )
         );
         (window as unknown as Record<string, unknown>).__DSH_COLLAPSE_PASTE__ = {
-            version: "0.2.1",
+            version: "0.2.2",
             armed: true
         };
         console.info("[collapse-paste] armed");
     } catch (error) {
         // Fail-open: the composer and transcript keep their stock behaviour.
         (window as unknown as Record<string, unknown>).__DSH_COLLAPSE_PASTE__ = {
-            version: "0.2.1",
+            version: "0.2.2",
             armed: false,
             error: String(error)
         };

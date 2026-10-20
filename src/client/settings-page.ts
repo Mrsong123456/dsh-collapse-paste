@@ -98,7 +98,7 @@ export function SettingsPage(): React.ReactElement {
     };
 
     const save = (): void => {
-        setConfig(draft);
+        setDraft({ ...setConfig(draft) });
         setSaved(true);
         setTimeout(() => setSaved(false), 1500);
     };

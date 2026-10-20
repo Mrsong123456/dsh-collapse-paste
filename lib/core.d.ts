@@ -77,4 +77,23 @@ export interface LeafSpan {
  * @returns the leaf span + local offsets, or null when nothing overlaps.
  */
 export declare function locateLeaves(texts: string[], start: number, length: number): LeafSpan | null;
+/** The complete browser-side settings shape, every field defaulting. */
+export interface CollapseConfig {
+    /** Master switch for the composer fold. */
+    active: boolean;
+    /** Minimum pasted lines that collapse in the composer. */
+    minLines: number;
+    /** Extra character floor for the composer fold (0 = lines only). */
+    minChars: number;
+    /** Whether long sent messages fold in the transcript. */
+    foldSent: boolean;
+    /** Transcript fold: minimum message characters. */
+    sentMinChars: number;
+    /** Transcript fold: minimum message lines. */
+    sentMinLines: number;
+}
+/** Defaults, also used by "Reset to defaults". */
+export declare const DEFAULT_COLLAPSE_CONFIG: CollapseConfig;
+/** Clamp booleans and numbers into the complete shape. */
+export declare function normalizeCollapseConfig(value: Partial<CollapseConfig> | null | undefined): CollapseConfig;
 //# sourceMappingURL=core.d.ts.map

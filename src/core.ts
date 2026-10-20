@@ -130,3 +130,51 @@ export function locateLeaves(texts: string[], start: number, length: number): Le
     if (last === -1) last = first;
     return { first, last, startOffset, endOffset };
 }
+
+// ── collapse-paste settings ────────────────────────────────────────────────
+/** The complete browser-side settings shape, every field defaulting. */
+export interface CollapseConfig {
+    /** Master switch for the composer fold. */
+    active: boolean;
+    /** Minimum pasted lines that collapse in the composer. */
+    minLines: number;
+    /** Extra character floor for the composer fold (0 = lines only). */
+    minChars: number;
+    /** Whether long sent messages fold in the transcript. */
+    foldSent: boolean;
+    /** Transcript fold: minimum message characters. */
+    sentMinChars: number;
+    /** Transcript fold: minimum message lines. */
+    sentMinLines: number;
+}
+
+/** Defaults, also used by "Reset to defaults". */
+export const DEFAULT_COLLAPSE_CONFIG: CollapseConfig = {
+    active: true,
+    minLines: 3,
+    minChars: 0,
+    foldSent: true,
+    sentMinChars: 600,
+    sentMinLines: 12
+};
+
+/** Clamp one integer field into [min, max], falling back to a default. */
+function intSetting(value: unknown, fallback: number, min: number, max: number): number {
+    if (value === null || value === undefined || value === "") return fallback;
+    const n = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, Math.floor(n)));
+}
+
+/** Clamp booleans and numbers into the complete shape. */
+export function normalizeCollapseConfig(value: Partial<CollapseConfig> | null | undefined): CollapseConfig {
+    const v = value || {};
+    return {
+        active: v.active !== false,
+        minLines: intSetting(v.minLines, DEFAULT_COLLAPSE_CONFIG.minLines, 1, 100),
+        minChars: intSetting(v.minChars, DEFAULT_COLLAPSE_CONFIG.minChars, 0, 100_000),
+        foldSent: v.foldSent !== false,
+        sentMinChars: intSetting(v.sentMinChars, DEFAULT_COLLAPSE_CONFIG.sentMinChars, 0, 1_000_000),
+        sentMinLines: intSetting(v.sentMinLines, DEFAULT_COLLAPSE_CONFIG.sentMinLines, 1, 100_000)
+    };
+}

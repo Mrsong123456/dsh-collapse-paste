@@ -61,16 +61,42 @@ function contentOf(row: HTMLElement): HTMLElement | null {
     return stack instanceof HTMLElement ? stack : null;
 }
 
+/**
+ * Text nodes of one subtree, skipping interactive/chrome elements.
+ *
+ * `textContent` would also collect the label of any button inside the
+ * rendered body (a code block's copy control, for example), which would
+ * pollute the folded copy and the char/line count. Walking text nodes and
+ * rejecting controls keeps only the message prose.
+ */
+function textOf(root: HTMLElement): string {
+    let out = "";
+    try {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let node = walker.nextNode();
+        while (node !== null) {
+            const parent = node.parentElement;
+            if (parent !== null && parent.closest("button, [role='button'], svg, script, style, noscript") === null) {
+                out += node.nodeValue || "";
+            }
+            node = walker.nextNode();
+        }
+    } catch {
+        return root.textContent || "";
+    }
+    return out;
+}
+
 /** Plain text of the message body only (never the action labels/time). */
 function measure(row: HTMLElement): { text: string; chars: number; lines: number } {
     const content = contentOf(row);
     let text = "";
     if (content !== null) {
-        text = content.textContent || "";
+        text = textOf(content);
     } else {
         for (const run of runsOf(row)) {
             if (run.matches("button, time, [role='button']")) continue;
-            const part = run.textContent || "";
+            const part = textOf(run);
             text += (text === "" ? "" : "\n") + part;
         }
     }
