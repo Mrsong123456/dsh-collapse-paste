@@ -118,8 +118,6 @@ src/
     └── styles/           # 注入的 CSS
 ```
 
-`lib/` 是构建产物，但故意提交到仓库：这样 `dsh plugin add github:...` 不需要在安装时构建。修改源码后请重新 `npm run build` 并提交 `lib/`。
-
 ## 发布到 GitHub
 
 仓库已按可直接推送的结构整理好（`lib/` 已提交，GitHub 安装无需构建）：
