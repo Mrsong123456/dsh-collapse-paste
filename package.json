@@ -1,0 +1,71 @@
+{
+  "name": "dsh-collapse-paste",
+  "description": "Fold multiline pastes in the DSH composer into an inline pill, and long sent messages into a collapsible transcript row; the full text is always sent to the model unchanged.",
+  "version": "0.2.0",
+  "author": "dsh-collapse-paste contributors",
+  "contributors": [
+    {
+      "name": "Robe ComeCaramelos",
+      "email": "hello@comecaramelos.com",
+      "url": "https://www.npmjs.com/package/@comecaramelos/dsh-collapse-multiline-paste"
+    }
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./core": "./lib/core.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "lib",
+    "src",
+    "scripts",
+    "tsconfig.json",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "LICENSE",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "paste",
+    "collapse",
+    "composer",
+    "transcript"
+  ],
+  "scripts": {
+    "build": "tsc && npm run build:client",
+    "build:host": "tsc",
+    "build:client": "tsc -p src/client/tsconfig.json && node scripts/build-client.mjs",
+    "clean": "rm -rf lib",
+    "dev": "tsc --watch",
+    "prepack": "npm run build",
+    "test": "npm run build && node --test \"test/*.test.mjs\""
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  },
+  "engines": {
+    "dsh": ">=0.2.1-rc.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.6",
+    "@types/react": "^18.3.31",
+    "esbuild": "^0.25.12",
+    "typescript": "^5.9.3"
+  }
+}

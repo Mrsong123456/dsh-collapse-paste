@@ -1,0 +1,6 @@
+# dsh-collapse-paste — bundle patch.
+# One row; the whole feature lives in the browser half (lib/client.js), and
+# the host half is intentionally empty so the package resolves as a bundle.
+- insert:
+    - id: collapse-paste
+      name: dsh-collapse-paste

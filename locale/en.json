@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Collapse multiline paste",
+    "description": "Fold a multiline paste into one inline pill; click to expand or collapse, and send the full text unchanged."
+  }
+}
