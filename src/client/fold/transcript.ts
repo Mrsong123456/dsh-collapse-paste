@@ -37,6 +37,8 @@ interface FoldState {
     text: string;
     chars: number;
     lines: number;
+    /** Nodes this row currently hides (content only, never the actions row). */
+    hidden: HTMLElement[];
 }
 
 /** The direct children of a row except our own cards. */
@@ -48,16 +50,31 @@ function runsOf(row: HTMLElement): HTMLElement[] {
     return out;
 }
 
-/** Plain text of one row, with a line break between child runs. */
-function measure(row: HTMLElement): { runs: HTMLElement[]; text: string; chars: number; lines: number } {
-    const runs = runsOf(row);
+/**
+ * The bubble body inside one user row, excluding the actions row (time and
+ * copy/edit/delete buttons) that sits beside it in DSH's `userRow` stack.
+ * The class prefix is hash-generated but the `userStack` suffix is stable in
+ * the shipped CSS module; a miss falls back to measured direct children.
+ */
+function contentOf(row: HTMLElement): HTMLElement | null {
+    const stack = row.querySelector<HTMLElement>('[class*="userStack"]');
+    return stack instanceof HTMLElement ? stack : null;
+}
+
+/** Plain text of the message body only (never the action labels/time). */
+function measure(row: HTMLElement): { text: string; chars: number; lines: number } {
+    const content = contentOf(row);
     let text = "";
-    for (const run of runs) {
-        const part = run.textContent || "";
-        text += (text === "" ? "" : "\n") + part;
+    if (content !== null) {
+        text = content.textContent || "";
+    } else {
+        for (const run of runsOf(row)) {
+            if (run.matches("button, time, [role='button']")) continue;
+            const part = run.textContent || "";
+            text += (text === "" ? "" : "\n") + part;
+        }
     }
     return {
-        runs,
         text,
         chars: text.length,
         lines: text === "" ? 0 : text.split("\n").length
@@ -100,7 +117,10 @@ function setText(el: HTMLElement, value: string): void {
 export function installTranscriptFold(): () => void {
     const expandedByKey = new Map<string, boolean>();
     const states = new WeakMap<HTMLElement, FoldState>();
+    /** Rows a mutation touched; a non-full pass reconsiders only these. */
+    const dirty = new Set<HTMLElement>();
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let pendingFull = true;
     let disposed = false;
 
     const style = document.createElement("style");
@@ -120,31 +140,44 @@ export function installTranscriptFold(): () => void {
     ].join("");
     document.head.appendChild(style);
 
-    /** Hide every run, remembering the previous inline display. */
-    function hideRuns(row: HTMLElement): void {
-        for (const run of runsOf(row)) {
-            if (run.style.display !== "none") {
-                run.setAttribute("data-cp-display", run.style.display || "");
-                run.style.display = "none";
-            }
+    /** Content nodes this row must hide (body only; actions stay usable). */
+    function hideTargets(row: HTMLElement): HTMLElement[] {
+        const content = contentOf(row);
+        return content !== null ? [content] : runsOf(row);
+    }
+
+    /** Hide the body, leaving the actions row visible. Idempotent. */
+    function hideContent(row: HTMLElement, st: FoldState): void {
+        const targets = hideTargets(row);
+        const live = st.hidden.filter((el) => el.isConnected);
+        const settled = live.length === targets.length
+            && targets.every((el, index) => live[index] === el && el.style.display === "none");
+        if (settled) return;
+        showContent(st);
+        for (const el of targets) {
+            st.hidden.push(el);
+            el.setAttribute("data-cp-display", el.style.display || "");
+            el.style.display = "none";
         }
     }
 
-    /** Restore every run hidden by this module. */
-    function showRuns(row: HTMLElement): void {
-        for (const run of runsOf(row)) {
-            const previous = run.getAttribute("data-cp-display");
+    /** Restore everything this module hid on one row. */
+    function showContent(st: FoldState): void {
+        for (const el of st.hidden) {
+            if (!el.isConnected) continue;
+            const previous = el.getAttribute("data-cp-display");
             if (previous !== null) {
-                run.style.display = previous;
-                run.removeAttribute("data-cp-display");
+                el.style.display = previous;
+                el.removeAttribute("data-cp-display");
             }
         }
+        st.hidden = [];
     }
 
     /** Apply the requested state to the row and both cards. */
     function setExpanded(row: HTMLElement, st: FoldState, expanded: boolean): void {
-        if (expanded) showRuns(row);
-        else hideRuns(row);
+        if (expanded) showContent(st);
+        else hideContent(row, st);
         st.expanded = expanded;
         if (expanded) {
             if (st.endCard.parentNode !== row) row.appendChild(st.endCard);
@@ -216,7 +249,8 @@ export function installTranscriptFold(): () => void {
             stamp: "",
             text: "",
             chars: 0,
-            lines: 0
+            lines: 0,
+            hidden: []
         };
         states.set(row, st);
 
@@ -259,75 +293,142 @@ export function installTranscriptFold(): () => void {
         return st;
     }
 
-    /** Fully undo one row (restore runs, remove both cards). */
+    /** Fully undo one row (restore body, remove both cards). */
     function removeCards(row: HTMLElement, st: FoldState): void {
-        showRuns(row);
+        showContent(st);
         if (st.card.parentNode === row) row.removeChild(st.card);
         if (st.endCard.parentNode === row) row.removeChild(st.endCard);
         states.delete(row);
     }
 
-    /** One debounced pass over the mounted transcript. */
-    function scan(): void {
+    /** Record one DOM node whose row must be reconsidered. */
+    function markDirty(node: Node): void {
+        const el = node instanceof Element ? node : node.parentElement;
+        if (el === null) return;
+        // Our own cards publish text changes; never treat them as row changes.
+        if (el.closest(`[${CARD_ATTR}]`) !== null) return;
+        const row = el.closest(ROW_SELECTOR);
+        if (row instanceof HTMLElement) dirty.add(row);
+        if (el instanceof HTMLElement && el.matches(ROW_SELECTOR)) dirty.add(el);
+        for (const nested of el.querySelectorAll<HTMLElement>(ROW_SELECTOR)) dirty.add(nested);
+    }
+
+    /** Whether a mutation can affect a foldable row (assistant tokens are ignored). */
+    function relevant(record: MutationRecord): boolean {
+        const target = record.target;
+        const el = target instanceof Element ? target : target.parentElement;
+        if (el !== null && el.closest(`[${CARD_ATTR}]`) !== null) return false;
+        if (el !== null && el.closest(ROW_SELECTOR) !== null) return true;
+        if (record.type !== "childList") return false;
+        for (const node of Array.from(record.addedNodes)) {
+            if (node instanceof Element && (node.matches(ROW_SELECTOR) || node.querySelector(ROW_SELECTOR) !== null)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Reconsider one row against the current settings. */
+    function processRow(row: HTMLElement, config: ReturnType<typeof getConfig>): void {
+        let st = states.get(row);
+        // React may have removed our card while reusing the row element.
+        if (st && st.card.parentNode !== row) {
+            states.delete(row);
+            st = undefined;
+        }
+        const m = measure(row);
+        if (st && st.stamp !== m.text) {
+            removeCards(row, st);
+            st = undefined;
+        }
+        if (!config.foldSent) {
+            if (st) removeCards(row, st);
+            return;
+        }
+        if (m.chars < config.sentMinChars && m.lines < config.sentMinLines) {
+            if (st) removeCards(row, st);
+            return;
+        }
+        const state = st || buildCards(row);
+        state.stamp = m.text;
+        state.text = m.text;
+        state.chars = m.chars;
+        state.lines = m.lines;
+        const key = row.getAttribute("data-chat-flow-key") || "";
+        const expanded = key !== "" && expandedByKey.get(key) === true;
+        setExpanded(row, state, expanded);
+        if (key !== "") expandedByKey.set(key, state.expanded);
+    }
+
+    /** Cap the per-message expand/collapse memo so long sessions stay bounded. */
+    function pruneExpanded(): void {
+        const MAX = 400;
+        if (expandedByKey.size <= MAX) return;
+        let excess = expandedByKey.size - MAX;
+        for (const key of expandedByKey.keys()) {
+            if (excess <= 0) break;
+            expandedByKey.delete(key);
+            excess -= 1;
+        }
+    }
+
+    /** Debounced pass: all rows on a full pass, otherwise only dirty rows. */
+    function scan(full: boolean): void {
         timer = null;
         if (disposed) return;
-        let rows: NodeListOf<HTMLElement>;
+        const config = getConfig();
+        let rows: HTMLElement[];
         try {
-            rows = document.querySelectorAll<HTMLElement>(ROW_SELECTOR);
+            rows = full
+                ? Array.from(document.querySelectorAll<HTMLElement>(ROW_SELECTOR))
+                : Array.from(dirty).filter((row) => row.isConnected);
         } catch {
             return;
         }
-        for (const row of Array.from(rows)) {
+        dirty.clear();
+        for (const row of rows) {
             if (!(row instanceof HTMLElement)) continue;
             if (row.closest("[hidden]") !== null) continue;
-
-            const config = getConfig();
-            let st = states.get(row);
-            // React may have removed our card while reusing the row element.
-            if (st && st.card.parentNode !== row) {
-                states.delete(row);
-                st = undefined;
-            }
-            const m = measure(row);
-            if (st && st.stamp !== m.text) {
-                removeCards(row, st);
-                st = undefined;
-            }
-            if (!config.foldSent) {
-                if (st) removeCards(row, st);
-                continue;
-            }
-            if (m.chars < config.sentMinChars && m.lines < config.sentMinLines) {
-                if (st) removeCards(row, st);
-                continue;
-            }
-            const state = st || buildCards(row);
-            state.stamp = m.text;
-            state.text = m.text;
-            state.chars = m.chars;
-            state.lines = m.lines;
-            const key = row.getAttribute("data-chat-flow-key") || "";
-            const expanded = key !== "" && expandedByKey.get(key) === true;
-            setExpanded(row, state, expanded);
-            if (key !== "") expandedByKey.set(key, state.expanded);
+            processRow(row, config);
         }
+        if (full) pruneExpanded();
     }
 
-    /** Coalesce the mutation storm of streaming and virtualized scrolling. */
-    function schedule(): void {
+    /** Coalesce the mutation storm; a full pass supersedes dirty-row passes. */
+    function schedule(full: boolean): void {
         if (disposed) return;
+        if (full) pendingFull = true;
         if (timer !== null) clearTimeout(timer);
-        timer = setTimeout(scan, 180);
+        timer = setTimeout(() => {
+            const runFull = pendingFull;
+            pendingFull = false;
+            scan(runFull);
+        }, 220);
     }
 
-    const observer = new MutationObserver(() => schedule());
+    const observer = new MutationObserver((records) => {
+        let any = false;
+        for (const record of records) {
+            if (!relevant(record)) continue;
+            any = true;
+            const target = record.target;
+            const el = target instanceof Element ? target : target.parentElement;
+            // A change inside an existing row: reconsider that row only.
+            if (el !== null && el.closest(ROW_SELECTOR) !== null) markDirty(target);
+            // Newly inserted rows (or wrappers containing them): just those.
+            if (record.type === "childList") {
+                for (const node of Array.from(record.addedNodes)) markDirty(node);
+            }
+        }
+        if (any) schedule(false);
+    });
     try {
         observer.observe(document.body, { childList: true, subtree: true, characterData: true });
     } catch {
         /* body unavailable */
     }
-    const unsubscribeConfig = subscribeConfig(() => schedule());
-    schedule();
+    const unsubscribeConfig = subscribeConfig(() => schedule(true));
+    schedule(true);
 
     return () => {
         disposed = true;
