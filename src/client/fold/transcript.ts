@@ -1,11 +1,11 @@
 /**
  * Sent-message folding — display-only transcript decoration.
  *
- * A long user message (or steering row) is rendered as one pill plus a copy
- * button; clicking the pill reveals the original message, and a second pill
- * at the END of the expanded message collapses it again without scrolling
- * back to the top. The stored message, the serialized prompt and the model
- * input are never touched, and assistant messages are left alone.
+ * A long user message (or steering row) is rendered as one summary pill;
+ * clicking the pill reveals the original message, and a second pill at the
+ * END of the expanded message collapses it again without scrolling back to
+ * the top. The stored message, the serialized prompt and the model input are
+ * never touched, and assistant messages are left alone.
  *
  * The transcript is React-owned DOM, so this module only decorates existing
  * rows: it tags the row's direct children as hidden, inserts its own cards,
@@ -29,12 +29,10 @@ interface FoldState {
     pill: HTMLButtonElement;
     label: HTMLElement;
     hint: HTMLElement;
-    copy: HTMLButtonElement;
     endCard: HTMLElement;
     endPill: HTMLButtonElement;
     expanded: boolean;
     stamp: string;
-    text: string;
     chars: number;
     lines: number;
     /** Nodes this row currently hides (content only, never the actions row). */
@@ -66,8 +64,8 @@ function contentOf(row: HTMLElement): HTMLElement | null {
  *
  * `textContent` would also collect the label of any button inside the
  * rendered body (a code block's copy control, for example), which would
- * pollute the folded copy and the char/line count. Walking text nodes and
- * rejecting controls keeps only the message prose.
+ * pollute the char/line count. Walking text nodes and rejecting controls
+ * keeps only the message prose.
  */
 function textOf(root: HTMLElement): string {
     let out = "";
@@ -160,9 +158,7 @@ export function installTranscriptFold(): () => void {
         ".cp-fold-end{margin-top:8px;}",
         ".cp-fold-end .cp-fold-chev{transform:rotate(-90deg);}",
         ".cp-fold-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
-        ".cp-fold-hint{flex:none;opacity:.82;white-space:nowrap;}",
-        ".cp-fold-copy{flex:none;height:38px;padding:0 14px;border:1px solid var(--dsw-alias-brand-primary);border-radius:999px;background:transparent;color:var(--dsw-alias-brand-primary);font-size:inherit;line-height:1;cursor:pointer;}",
-        ".cp-fold-copy:hover{background:var(--dsw-alias-brand-primary);color:#fff;}"
+        ".cp-fold-hint{flex:none;opacity:.82;white-space:nowrap;}"
     ].join("");
     document.head.appendChild(style);
 
@@ -218,7 +214,7 @@ export function installTranscriptFold(): () => void {
             : (isZh() ? "点击展开" : "Click to expand"));
     }
 
-    /** Build the top pill/copy row and the bottom collapse pill for one row. */
+    /** Build the top summary pill and the bottom collapse pill for one row. */
     function buildCards(row: HTMLElement): FoldState {
         const card = document.createElement("div");
         card.className = "cp-fold";
@@ -239,13 +235,7 @@ export function installTranscriptFold(): () => void {
         pill.appendChild(label);
         pill.appendChild(hint);
 
-        const copy = document.createElement("button");
-        copy.type = "button";
-        copy.className = "cp-fold-copy";
-        copy.textContent = isZh() ? "复制" : "Copy";
-
         card.appendChild(pill);
-        card.appendChild(copy);
 
         const endCard = document.createElement("div");
         endCard.className = "cp-fold cp-fold-end";
@@ -268,12 +258,10 @@ export function installTranscriptFold(): () => void {
             pill,
             label,
             hint,
-            copy,
             endCard,
             endPill,
             expanded: false,
             stamp: "",
-            text: "",
             chars: 0,
             lines: 0,
             hidden: []
@@ -302,19 +290,6 @@ export function installTranscriptFold(): () => void {
                 /* older runtimes: leave scrolling to the browser */
             }
         });
-        copy.addEventListener("click", (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            try {
-                void navigator.clipboard.writeText(st.text).then(() => {
-                    setText(copy, isZh() ? "已复制" : "Copied");
-                    setTimeout(() => setText(copy, isZh() ? "复制" : "Copy"), 1200);
-                }, () => {});
-            } catch {
-                /* clipboard unavailable */
-            }
-        });
-
         row.insertBefore(card, row.firstChild);
         return st;
     }
@@ -377,7 +352,6 @@ export function installTranscriptFold(): () => void {
         }
         const state = st || buildCards(row);
         state.stamp = m.text;
-        state.text = m.text;
         state.chars = m.chars;
         state.lines = m.lines;
         const key = row.getAttribute("data-chat-flow-key") || "";
