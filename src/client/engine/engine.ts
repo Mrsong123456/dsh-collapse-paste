@@ -569,10 +569,45 @@ function failOpen(error: unknown): void {
     dispose();
 }
 
+/**
+ * Put the composer back to plain text: reveal every hidden run and drop the
+ * chip that marked it. Runs on teardown so a folded draft cannot outlive the
+ * plugin that folded it (uninstall, disable, fail-open).
+ */
+function restoreComposer(): void {
+    const editor = state.editor;
+    if (editor === null) return;
+    const regions = Array.from(state.regions.values());
+    if (regions.length === 0) return;
+    state.regions.clear();
+    commitUpdate(editor, () => {
+        const st = stateOf(editor as unknown as DocEditor);
+        if (st === null) return;
+        for (const region of regions) {
+            region.disposed = true;
+            for (const k of region.hiddenKeys) {
+                const n = st._nodeMap.get(k);
+                if (n !== undefined && isAttached(n, st) && isHidden(n)) showNode(n);
+            }
+            const chip = st._nodeMap.get(region.chipKey);
+            if (chip !== undefined && isAttached(chip, st) && typeof chip.remove === "function") {
+                (chip.remove as () => void)();
+            }
+        }
+    });
+}
+
 /** Tear down every listener and region. */
 export function dispose(): void {
     if (state.disposed) return;
     state.disposed = true;
+    // A folded draft must not outlive the plugin: reveal it before detaching.
+    try {
+        restoreComposer();
+    } catch (ignored) {
+        // Best effort: a detached/!ready editor leaves the draft as it was,
+        // which is still better than throwing out of a teardown.
+    }
     detachRoot();
     bodyObserver.disconnect();
     document.removeEventListener("paste", onPasteCapture as EventListener, true);

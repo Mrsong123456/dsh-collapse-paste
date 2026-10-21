@@ -23,6 +23,21 @@ const ROW_SELECTOR = '[data-chat-flow-kind="user"], [data-chat-flow-kind="steeri
 /** Mark our own cards so row measurement and hiding never touch them. */
 const CARD_ATTR = "data-cp-fold-card";
 
+/**
+ * Where a hidden body keeps the `display` value it had before we hid it.
+ * The attribute outlives this module's bookkeeping, which is exactly what
+ * makes a leftover recoverable after a crash or a torn-down instance.
+ */
+const DISPLAY_ATTR = "data-cp-display";
+
+/** Put one body back exactly as it was, idempotently. */
+function restoreElement(el: HTMLElement): void {
+    const previous = el.getAttribute(DISPLAY_ATTR);
+    if (previous === null) return;
+    el.style.display = previous;
+    el.removeAttribute(DISPLAY_ATTR);
+}
+
 /** One folded row's DOM handles and last measured content. */
 interface FoldState {
     card: HTMLElement;
@@ -141,6 +156,13 @@ function setText(el: HTMLElement, value: string): void {
 export function installTranscriptFold(): () => void {
     const expandedByKey = new Map<string, boolean>();
     const states = new WeakMap<HTMLElement, FoldState>();
+    /**
+     * Every body this instance has hidden. Deliberately independent of
+     * `states`: a row can lose its state (React drops our card and reuses the
+     * row) while its body is still `display:none`, and a teardown must be able
+     * to put that body back without consulting the row bookkeeping.
+     */
+    const hiddenAll = new Set<HTMLElement>();
     /** Rows a mutation touched; a non-full pass reconsiders only these. */
     const dirty = new Set<HTMLElement>();
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -151,8 +173,12 @@ export function installTranscriptFold(): () => void {
     style.dataset.plugin = "dsh-collapse-paste";
     style.textContent = [
         ".cp-fold{display:flex;align-items:center;justify-content:flex-end;gap:8px;width:100%;margin:6px 0 10px;max-width:100%;}",
-        ".cp-fold-pill{display:inline-flex;align-items:center;gap:8px;height:38px;max-width:100%;padding:0 16px;border:1px solid var(--dsw-alias-brand-primary);border-radius:999px;background:var(--dsw-alias-brand-primary);color:#fff;font-size:inherit;line-height:1;cursor:pointer;}",
-        ".cp-fold-pill:hover{border-color:var(--dsw-alias-brand-primary);color:#fff;filter:brightness(.94);}",
+        // `--dsw-alias-brand-primary` is an ink token (near-black in light, near-white
+        // in dark), so using it as a surface made the pill black. Keep an explicit
+        // accent pair instead: same blue in both themes, white label on top.
+        ".cp-fold-pill{--cp-fold-accent:#4d6bfe;--cp-fold-accent-hot:#3f5cf0;display:inline-flex;align-items:center;gap:8px;height:38px;max-width:100%;padding:0 16px;border:1px solid var(--cp-fold-accent);border-radius:999px;background:var(--cp-fold-accent);color:#fff;font-size:inherit;line-height:1;cursor:pointer;}",
+        ".cp-fold-pill:hover{background:var(--cp-fold-accent-hot);border-color:var(--cp-fold-accent-hot);color:#fff;}",
+        ".cp-fold-pill:focus-visible{outline:2px solid color-mix(in srgb,var(--cp-fold-accent) 55%,transparent);outline-offset:2px;}",
         ".cp-fold-chev{display:inline-block;flex:none;font-size:1.15em;transition:transform .15s ease;}",
         '.cp-fold[data-expanded="1"] .cp-fold-chev{transform:rotate(90deg);}',
         ".cp-fold-end{margin-top:8px;}",
@@ -178,7 +204,8 @@ export function installTranscriptFold(): () => void {
         showContent(st);
         for (const el of targets) {
             st.hidden.push(el);
-            el.setAttribute("data-cp-display", el.style.display || "");
+            hiddenAll.add(el);
+            el.setAttribute(DISPLAY_ATTR, el.style.display || "");
             el.style.display = "none";
         }
     }
@@ -186,14 +213,36 @@ export function installTranscriptFold(): () => void {
     /** Restore everything this module hid on one row. */
     function showContent(st: FoldState): void {
         for (const el of st.hidden) {
+            hiddenAll.delete(el);
+            // A detached body keeps its marker; if React reattaches that node
+            // later, the orphan sweep in `scan()` restores it.
             if (!el.isConnected) continue;
-            const previous = el.getAttribute("data-cp-display");
-            if (previous !== null) {
-                el.style.display = previous;
-                el.removeAttribute("data-cp-display");
-            }
+            restoreElement(el);
         }
         st.hidden = [];
+    }
+
+    /** Put back every body this instance hid, whatever its row state is now. */
+    function restoreAllHidden(): void {
+        for (const el of Array.from(hiddenAll)) restoreElement(el);
+        hiddenAll.clear();
+    }
+
+    /**
+     * Restore bodies marked as hidden that this instance is not tracking:
+     * leftovers from an instance that crashed or was torn down without being
+     * able to restore them (fail-open, plugin reload, cancelled teardown).
+     */
+    function healOrphans(): void {
+        let marked: HTMLElement[];
+        try {
+            marked = Array.from(document.querySelectorAll<HTMLElement>("[" + DISPLAY_ATTR + "]"));
+        } catch {
+            return;
+        }
+        for (const el of marked) {
+            if (!hiddenAll.has(el)) restoreElement(el);
+        }
     }
 
     /** Apply the requested state to the row and both cards. */
@@ -332,8 +381,11 @@ export function installTranscriptFold(): () => void {
     /** Reconsider one row against the current settings. */
     function processRow(row: HTMLElement, config: ReturnType<typeof getConfig>): void {
         let st = states.get(row);
-        // React may have removed our card while reusing the row element.
+        // React may have removed our card while reusing the row element; the
+        // body can still be hidden at that moment, so restore before dropping
+        // the only pointer to what we hid.
         if (st && st.card.parentNode !== row) {
+            showContent(st);
             states.delete(row);
             st = undefined;
         }
@@ -376,6 +428,7 @@ export function installTranscriptFold(): () => void {
     function scan(full: boolean): void {
         timer = null;
         if (disposed) return;
+        healOrphans();
         const config = getConfig();
         let rows: HTMLElement[];
         try {
@@ -437,11 +490,18 @@ export function installTranscriptFold(): () => void {
         try { observer.disconnect(); } catch { /* already gone */ }
         try { unsubscribeConfig(); } catch { /* already gone */ }
         try { style.remove(); } catch { /* already gone */ }
+        // Restore by what we hid, not by what the row bookkeeping still
+        // knows: a row whose state was dropped still has a hidden body.
+        restoreAllHidden();
+        // Sweep anything a previous, less careful teardown left behind.
+        healOrphans();
+        // `states` is the fast path; the DOM sweep catches rows whose state
+        // entry is already gone.
         for (const card of Array.from(document.querySelectorAll<HTMLElement>("[" + CARD_ATTR + "]"))) {
             const row = card.parentElement;
-            if (!row) continue;
-            const st = states.get(row);
-            if (st) removeCards(row, st);
+            const st = row ? states.get(row) : undefined;
+            if (st && row) removeCards(row, st);
+            else card.remove();
         }
     };
 }

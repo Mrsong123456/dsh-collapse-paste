@@ -58,16 +58,39 @@ function isZh(): boolean {
  * @param ctx - the browser plugin context.
  */
 export function apply(ctx: PluginContext): void {
+    /**
+     * Mounts that succeeded, in mount order. A throw below must undo them:
+     * the host may keep a half-applied fiber's effects alive, and a fold left
+     * behind would keep hiding transcript bodies with no owner to restore
+     * them.
+     */
+    const teardown: Array<() => void> = [];
+    /**
+     * Register one mount as an effect and remember its cleanup, so the catch
+     * below can run the same cleanups when the host will not (or not yet).
+     */
+    const mount = (exec: () => (() => void) | void, label: string): void => {
+        ctx.effect(() => {
+            const off = exec();
+            if (typeof off !== "function") return undefined;
+            teardown.push(off);
+            return () => {
+                const index = teardown.indexOf(off);
+                if (index >= 0) teardown.splice(index, 1);
+                off();
+            };
+        }, label);
+    };
     try {
         ensureComposerStyles();
-        ctx.effect(() => ctx.locale.register(LOCALE_NAMESPACE, DICTIONARIES), "collapse-multiline: dictionaries");
+        mount(() => ctx.locale.register(LOCALE_NAMESPACE, DICTIONARIES), "collapse-multiline: dictionaries");
         bindLocale(ctx.locale.bind(LOCALE_NAMESPACE));
         bindScope(LOCAL_SCOPE);
-        ctx.effect(() => {
+        mount(() => {
             arm();
             return () => dispose();
         }, "collapse-multiline: DOM engine");
-        ctx.effect(() => installTranscriptFold(), "collapse-paste: transcript fold");
+        mount(() => installTranscriptFold(), "collapse-paste: transcript fold");
         ctx.slots.inject("settings.section", () =>
             ctx.slots.register(
                 {
@@ -86,6 +109,16 @@ export function apply(ctx: PluginContext): void {
         console.info("[collapse-paste] armed");
     } catch (error) {
         // Fail-open: the composer and transcript keep their stock behaviour.
+        // Unwind in reverse mount order so hidden transcript bodies come back
+        // before the error is reported.
+        while (teardown.length > 0) {
+            const off = teardown.pop();
+            try {
+                off?.();
+            } catch {
+                /* keep unwinding: one stuck mount must not strand the rest */
+            }
+        }
         (window as unknown as Record<string, unknown>).__DSH_COLLAPSE_PASTE__ = {
             version: "0.2.3",
             armed: false,
