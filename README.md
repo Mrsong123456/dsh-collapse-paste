@@ -66,27 +66,6 @@ dsh plugin --profile desktop add file:C:\path\to\dsh-collapse-paste
 dsh plugin --profile desktop remove dsh-collapse-paste
 ```
 
-## 更新
-
-npm 安装的用户，建议显式指定目标版本（pnpm 的发布年龄保护同样会拦住 `--latest`）：
-
-```sh
-dsh plugin --profile desktop add dsh-collapse-paste@0.2.4
-```
-
-GitHub 安装的用户：
-
-```sh
-dsh plugin --profile desktop remove dsh-collapse-paste
-dsh plugin --profile desktop add github:Mrsong123456/dsh-collapse-paste
-```
-
-更新后**重启 DSH**（桌面版重启应用；Web 端重启 `dsh web`）。检查当前版本：
-
-```sh
-dsh plugin --profile desktop list dsh-collapse-paste
-```
-
 ## 配置
 
 GUI 内：**设置 → 折叠多行粘贴**（Settings 侧栏里，靠近底部）。
