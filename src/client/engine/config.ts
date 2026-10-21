@@ -64,6 +64,24 @@ export function readConfig(): EngineConfig | null {
     };
 }
 
+/**
+ * Subscribe to settings changes through the bound scope.
+ *
+ * The engine keeps existing folds in step with the master switch: turning
+ * "Enable composer folding" off unfolds the current draft instead of leaving
+ * it collapsed until the user deletes the chip. Returns a no-op when no scope
+ * is bound yet (the engine is inert in that state anyway).
+ */
+export function subscribeConfigFace(listener: () => void): () => void {
+    const current = scope;
+    if (current === null) return () => {};
+    try {
+        return current.subscribe(listener);
+    } catch {
+        return () => {};
+    }
+}
+
 /** Resolve the badge's "X chars / Y lines" label for one region. */
 export function badgeLabel(chars: number, lines: number): string {
     return localeT === null ? chars + " chars / " + lines + " lines" : localeT("label", { chars, lines });

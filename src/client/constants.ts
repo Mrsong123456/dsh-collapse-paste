@@ -12,20 +12,3 @@ export const ROOT_SELECTOR = "[data-composer-input]";
 
 /** Quiet window after the last mutation before a commit is settled. */
 export const QUIET_MS = 80;
-
-/** One settings control's spec: its kind and, for ints, the valid range. */
-export interface FieldSpec {
-    kind: "bool" | "int";
-    min?: number;
-    max?: number;
-}
-
-/** The card's controls, by field key. */
-export const FIELDS: Record<string, FieldSpec> = {
-    active: { kind: "bool" },
-    minLines: { kind: "int", min: 1, max: 100 },
-    minChars: { kind: "int", min: 0, max: 10000 }
-};
-
-/** Control order in the card body. */
-export const FIELD_ORDER = ["active", "minLines", "minChars"];

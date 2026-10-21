@@ -23,10 +23,11 @@ import { LOCALE_NAMESPACE } from "./plugin-meta.js";
 import { DICTIONARIES } from "./locales/index.js";
 import { arm, currentEpoch } from "./engine/engine.js";
 import { bindLocale, bindScope, type SettingsScope } from "./engine/config.js";
-import { getConfig } from "./settings.js";
+import { getConfig, subscribeConfig } from "./settings.js";
 import { SettingsPage } from "./settings-page.js";
 import { ensureComposerStyles } from "./styles/index.js";
 import { installTranscriptFold } from "./fold/transcript.js";
+import { VERSION } from "./version.js";
 import type { PluginContext } from "./types.js";
 
 /** How many times the host has applied this plugin in this page. */
@@ -39,7 +40,9 @@ const LOCAL_SCOPE: SettingsScope = {
         value: getConfig(),
         writable: false
     }),
-    subscribe: () => () => {},
+    // Real subscription: the engine uses it to unfold the draft as soon as
+    // "Enable composer folding" is switched off.
+    subscribe: (listener) => subscribeConfig(listener),
     set: async () => {},
     unset: async () => {}
 };
@@ -96,29 +99,49 @@ export function apply(ctx: PluginContext): void {
     };
     try {
         ensureComposerStyles();
-        mount(() => ctx.locale.register(LOCALE_NAMESPACE, DICTIONARIES), "collapse-multiline: dictionaries");
-        bindLocale(ctx.locale.bind(LOCALE_NAMESPACE));
+        // Locale is optional: without it the copy falls back to English, but
+        // the feature itself must still mount. (Same rule for the Settings
+        // page below; only the engine and the fold are hard requirements.)
+        mount(() => {
+            const locale = ctx.locale;
+            if (locale === undefined || locale === null || typeof locale.register !== "function") return undefined;
+            try {
+                locale.register(LOCALE_NAMESPACE, DICTIONARIES);
+            } catch (error) {
+                console.warn("[collapse-paste] locale unavailable:", error);
+                return undefined;
+            }
+            bindLocale(locale.bind(LOCALE_NAMESPACE));
+            return undefined;
+        }, "collapse-multiline: dictionaries");
         bindScope(LOCAL_SCOPE);
         mount(() => arm(), "collapse-multiline: DOM engine");
         mount(() => installTranscriptFold(), "collapse-paste: transcript fold");
-        ctx.slots.inject("settings.section", () =>
-            ctx.slots.register(
-                {
-                    name: "settings.section",
-                    id: "collapse-paste",
-                    order: 35,
-                    label: () => (isZh() ? "折叠多行粘贴" : "Collapse paste")
-                },
-                SettingsPage
-            )
-        );
+        const slots = ctx.slots;
+        if (slots !== undefined && slots !== null && typeof slots.inject === "function") {
+            try {
+                slots.inject("settings.section", () =>
+                    slots.register(
+                        {
+                            name: "settings.section",
+                            id: "collapse-paste",
+                            order: 35,
+                            label: () => (isZh() ? "折叠多行粘贴" : "Collapse paste")
+                        },
+                        SettingsPage
+                    )
+                );
+            } catch (error) {
+                console.warn("[collapse-paste] settings page unavailable:", error);
+            }
+        }
         (window as unknown as Record<string, unknown>).__DSH_COLLAPSE_PASTE__ = {
-            version: "0.2.3",
+            version: VERSION,
             instance,
             engineEpoch: currentEpoch(),
             armed: true
         };
-        console.info("[collapse-paste] armed", { instance });
+        console.info("[collapse-paste] armed", { instance, version: VERSION });
     } catch (error) {
         // Fail-open: the composer and transcript keep their stock behaviour.
         // Unwind in reverse mount order so hidden transcript bodies come back
@@ -132,7 +155,7 @@ export function apply(ctx: PluginContext): void {
             }
         }
         (window as unknown as Record<string, unknown>).__DSH_COLLAPSE_PASTE__ = {
-            version: "0.2.3",
+            version: VERSION,
             instance,
             engineEpoch: currentEpoch(),
             armed: false,

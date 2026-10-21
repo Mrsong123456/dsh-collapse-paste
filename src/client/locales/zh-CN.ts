@@ -6,7 +6,7 @@
  */
 export const zh = {
     title: "折叠多行粘贴",
-    description: "将粘贴的多行文本压缩为可展开的「X 字符 / Y 行」徽章。",
+    description: "将粘贴的多行文本压缩为可展开的「X 字符 / Y 行」内联标签。",
     active: "启用",
     activeHint: "折叠编辑器中粘贴的多行文本。关闭则保持默认行为。",
     minLines: "最少行数",

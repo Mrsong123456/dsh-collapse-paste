@@ -21,7 +21,7 @@
  */
 import { diffPaste, locateLeaves, meetsThreshold, sanitize } from "../../core.js";
 import { QUIET_MS, ROOT_SELECTOR } from "../constants.js";
-import { badgeLabel, readConfig } from "./config.js";
+import { badgeLabel, readConfig, subscribeConfigFace } from "./config.js";
 import { CHIP_TYPE, ensureChipClass, setChipToggle, type ChipClass, type ChipEditor, type ChipNode } from "./chip.js";
 import {
     docLeaves,
@@ -78,7 +78,9 @@ const state = {
     /** chip node key → region */
     regions: new Map<string, Region>(),
     pending: null as PendingPaste | null,
-    quietTimer: null as ReturnType<typeof setTimeout> | null
+    quietTimer: null as ReturnType<typeof setTimeout> | null,
+    /** Unsubscribe from the settings scope (set while armed). */
+    configOff: null as (() => void) | null
 };
 
 /** The current mount id (diagnostics: which mount owns the engine now). */
@@ -443,6 +445,8 @@ function toggleChip(chip: ChipNode): void {
 function onKeyDown(event: KeyboardEvent): void {
     if (state.disposed || state.failed || state.regions.size === 0) return;
     if (event.key !== "Backspace" && event.key !== "Delete") return;
+    // Backspace during IME composition edits the candidate, not the draft.
+    if (event.isComposing) return;
     const editor = state.editor;
     if (editor === null) return;
     const st = stateOf(editor as DocEditor);
@@ -611,6 +615,21 @@ function restoreComposer(): void {
 }
 
 /**
+ * Settings changed: the master switch also applies to what is already on
+ * screen, so switching composer folding off unfolds the current draft
+ * instead of leaving a chip that the setting says should not exist.
+ */
+function onConfigChange(): void {
+    if (state.disposed || state.failed) return;
+    try {
+        const config = readConfig();
+        if (config !== null && !config.active) restoreComposer();
+    } catch (error) {
+        failOpen(error);
+    }
+}
+
+/**
  * Tear down every listener and region. Safe to call twice.
  *
  * @param owner - the mount id this cleanup belongs to. A cleanup from an
@@ -622,6 +641,12 @@ export function dispose(owner?: number): void {
     if (state.disposed) return;
     state.disposed = true;
     state.armed = false;
+    try {
+        state.configOff?.();
+    } catch {
+        /* already gone */
+    }
+    state.configOff = null;
     // A folded draft must not outlive the plugin: reveal it before detaching.
     try {
         restoreComposer();
@@ -656,6 +681,14 @@ export function arm(): () => void {
     state.chipClass = null;
     state.pending = null;
     setChipToggle(toggleChip);
+    // A stale subscription from an earlier arm would fire against this
+    // engine, so replace it rather than stacking one per arm.
+    try {
+        state.configOff?.();
+    } catch {
+        /* already gone */
+    }
+    state.configOff = subscribeConfigFace(onConfigChange);
     document.addEventListener("paste", onPasteCapture as EventListener, true);
     document.addEventListener("keydown", onKeyDown, true);
     try {

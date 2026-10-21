@@ -88,30 +88,65 @@ function contentOf(row: HTMLElement): HTMLElement | null {
     return stack instanceof HTMLElement ? stack : null;
 }
 
+/** Block-level tags whose boundaries read as a line break in the prose. */
+const BLOCK_TAGS = new Set([
+    "P", "DIV", "LI", "UL", "OL", "BLOCKQUOTE", "PRE",
+    "H1", "H2", "H3", "H4", "H5", "H6", "SECTION", "ARTICLE", "TABLE", "TR"
+]);
+
+/** Elements whose text is chrome, never message prose. */
+const CHROME = "button, [role='button'], svg, script, style, noscript";
+
 /**
- * Text nodes of one subtree, skipping interactive/chrome elements.
+ * Whether one direct child of a row is the actions row / chrome, not body.
  *
- * `textContent` would also collect the label of any button inside the
- * rendered body (a code block's copy control, for example), which would
- * pollute the char/line count. Walking text nodes and rejecting controls
- * keeps only the message prose.
+ * Only used when `contentOf` misses (the `userStack` class changed). A row
+ * whose body carries a copy control (a short code block) could be mistaken
+ * for chrome, so the heuristic also requires the child to be short.
+ */
+function isChrome(run: HTMLElement): boolean {
+    if (run.matches("button, time, [role='button']")) return true;
+    if (run.querySelector("time") !== null) return true;
+    if (run.querySelector("button, [role='button']") === null) return false;
+    return (run.textContent || "").trim().length <= 80;
+}
+
+/**
+ * Text of one subtree, skipping chrome and turning block boundaries into
+ * newlines.
+ *
+ * `textContent` would also collect a code block's copy control, so the walk
+ * skips control subtrees. Line counting cannot rely on literal "\n" text
+ * nodes only: a message rendered one block per line would count as one line.
+ * A newline is emitted at block boundaries (never doubled, never leading),
+ * so both renderings count the same.
  */
 function textOf(root: HTMLElement): string {
     let out = "";
-    try {
-        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-        let node = walker.nextNode();
-        while (node !== null) {
-            const parent = node.parentElement;
-            if (parent !== null && parent.closest("button, [role='button'], svg, script, style, noscript") === null) {
-                out += node.nodeValue || "";
-            }
-            node = walker.nextNode();
+    const breakLine = (): void => {
+        if (out !== "" && !out.endsWith("\n")) out += "\n";
+    };
+    const walk = (node: Node): void => {
+        if (node.nodeType === 3) {
+            const parent = (node as Text).parentElement;
+            if (parent === null || parent.closest(CHROME) !== null) return;
+            out += node.nodeValue || "";
+            return;
         }
+        if (node.nodeType !== 1) return;
+        const el = node as HTMLElement;
+        if (el.closest(CHROME) !== null) return;
+        const block = BLOCK_TAGS.has(el.tagName);
+        if (block) breakLine();
+        for (const child of Array.from(el.childNodes)) walk(child);
+        if (block) breakLine();
+    };
+    try {
+        walk(root);
     } catch {
         return root.textContent || "";
     }
-    return out;
+    return out.replace(/\n+$/, "");
 }
 
 /** Plain text of the message body only (never the action labels/time). */
@@ -122,7 +157,7 @@ function measure(row: HTMLElement): { text: string; chars: number; lines: number
         text = textOf(content);
     } else {
         for (const run of runsOf(row)) {
-            if (run.matches("button, time, [role='button']")) continue;
+            if (isChrome(run)) continue;
             const part = textOf(run);
             text += (text === "" ? "" : "\n") + part;
         }
@@ -236,7 +271,12 @@ export function installTranscriptFold(): () => void {
     /** Content nodes this row must hide (body only; actions stay usable). */
     function hideTargets(row: HTMLElement): HTMLElement[] {
         const content = contentOf(row);
-        return content !== null ? [content] : runsOf(row);
+        if (content !== null) return [content];
+        const runs = runsOf(row);
+        const body = runs.filter((run) => !isChrome(run));
+        // If every child looks like chrome the heuristic is wrong for this
+        // host build; hiding the whole row beats leaving a pill over nothing.
+        return body.length > 0 ? body : runs;
     }
 
     /** Hide the body, leaving the actions row visible. Idempotent. */

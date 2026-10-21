@@ -11,6 +11,15 @@ import { getConfig, resetConfig, setConfig, type CollapseConfig } from "./settin
 
 const h = React.createElement;
 
+/**
+ * The host's filled-primary pair. `--dsw-alias-brand-primary` is an INK
+ * token (near-black in light, near-white in dark), so using it as a surface
+ * made the Save label white-on-white in dark mode. Fall back to the same
+ * blue the fold pill uses when the filled pair is not defined.
+ */
+const PRIMARY_FILL = "var(--dsw-alias-button-primary-fill, #4d6bfe)";
+const PRIMARY_INK = "var(--dsw-alias-label-primary-foreground, #fff)";
+
 /** Whether the UI is Chinese (decided per render). */
 function isZh(): boolean {
     try {
@@ -48,21 +57,49 @@ function field(label: string, hint: string, control: React.ReactNode): React.Rea
     );
 }
 
-/** A number input bound to one integer field. */
-function numberInput(
-    value: number,
-    min: number,
-    max: number,
-    onChange: (value: number) => void
-): React.ReactElement {
+/**
+ * A number input that stays editable while empty.
+ *
+ * The value is a controlled number, but binding `String(value)` directly
+ * made clearing the field impossible: `Number("") === 0` immediately wrote
+ * a zero back. This keeps the raw text while focused, parses only a
+ * non-empty value, and clamps once on blur.
+ */
+function NumberField(props: {
+    value: number;
+    min: number;
+    max: number;
+    onChange: (value: number) => void;
+}): React.ReactElement {
+    const { value, min, max, onChange } = props;
+    const [text, setText] = React.useState(String(value));
+    const [focused, setFocused] = React.useState(false);
+    React.useEffect(() => {
+        if (!focused) setText(String(value));
+    }, [value, focused]);
     return h("input", {
         type: "number",
         min,
         max,
-        value: String(value),
+        value: text,
+        onFocus: () => setFocused(true),
         onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
-            const next = Number(event.target.value);
-            if (Number.isFinite(next)) onChange(next);
+            const next = event.target.value;
+            setText(next);
+            if (next.trim() === "") return;
+            const parsed = Number(next);
+            if (Number.isFinite(parsed)) onChange(parsed);
+        },
+        onBlur: () => {
+            setFocused(false);
+            const parsed = Math.floor(Number(text));
+            if (text.trim() === "" || !Number.isFinite(parsed)) {
+                setText(String(value));
+                return;
+            }
+            const clamped = Math.min(max, Math.max(min, parsed));
+            setText(String(clamped));
+            if (clamped !== value) onChange(clamped);
         },
         style: {
             width: "88px",
@@ -82,7 +119,7 @@ function checkbox(value: boolean, onChange: (value: boolean) => void): React.Rea
         type: "checkbox",
         checked: value,
         onChange: (event: React.ChangeEvent<HTMLInputElement>) => onChange(event.target.checked),
-        style: { width: "18px", height: "18px", accentColor: "var(--dsw-alias-brand-primary)" }
+        style: { width: "18px", height: "18px", accentColor: PRIMARY_FILL }
     });
 }
 
@@ -97,17 +134,20 @@ export function SettingsPage(): React.ReactElement {
         setSaved(false);
     };
 
-    const save = (): void => {
-        setDraft({ ...setConfig(draft) });
+    const flash = (): void => {
         setSaved(true);
         setTimeout(() => setSaved(false), 1500);
+    };
+
+    const save = (): void => {
+        setDraft({ ...setConfig(draft) });
+        flash();
     };
 
     const reset = (): void => {
         const next = resetConfig();
         setDraft({ ...next });
-        setSaved(true);
-        setTimeout(() => setSaved(false), 1500);
+        flash();
     };
 
     return h(
@@ -120,31 +160,35 @@ export function SettingsPage(): React.ReactElement {
                 ? "输入框粘贴折叠与发送后消息折叠的阈值。设置保存在当前浏览器（localStorage），保存后立即生效。"
                 : "Thresholds for composer paste folding and sent-message folding. Settings live in this browser (localStorage) and apply immediately."
         ),
-        field(z ? "启用输入框折叠" : "Enable composer folding", "", checkbox(draft.active, (v) => set("active", v))),
+        field(
+            z ? "启用输入框折叠" : "Enable composer folding",
+            z ? "关闭后立即展开当前草稿，之后的粘贴保持原样" : "Off unfolds the current draft; later pastes stay stock",
+            checkbox(draft.active, (v) => set("active", v))
+        ),
         field(
             z ? "输入框：最小行数" : "Composer: minimum lines",
-            z ? "粘贴至少这么多行才折叠" : "A paste needs at least this many lines to fold",
-            numberInput(draft.minLines, 1, 100, (v) => set("minLines", v))
+            z ? "与字符数下限需同时达到" : "Must also meet the character floor",
+            h(NumberField, { value: draft.minLines, min: 1, max: 100, onChange: (v) => set("minLines", v) })
         ),
         field(
             z ? "输入框：最小字符数" : "Composer: minimum characters",
             z ? "0 表示只看行数" : "0 means lines only",
-            numberInput(draft.minChars, 0, 100000, (v) => set("minChars", v))
+            h(NumberField, { value: draft.minChars, min: 0, max: 100000, onChange: (v) => set("minChars", v) })
         ),
         field(
             z ? "发送后折叠长消息" : "Fold long sent messages",
-            "",
+            z ? "关闭后消息区立即恢复完整显示" : "Off expands messages immediately",
             checkbox(draft.foldSent, (v) => set("foldSent", v))
         ),
         field(
             z ? "消息折叠：最小字符数" : "Message fold: minimum characters",
-            "",
-            numberInput(draft.sentMinChars, 0, 1000000, (v) => set("sentMinChars", v))
+            z ? "与最小行数任一达到即折叠" : "Folds when this or the line floor is met",
+            h(NumberField, { value: draft.sentMinChars, min: 0, max: 1000000, onChange: (v) => set("sentMinChars", v) })
         ),
         field(
             z ? "消息折叠：最小行数" : "Message fold: minimum lines",
-            "",
-            numberInput(draft.sentMinLines, 1, 100000, (v) => set("sentMinLines", v))
+            z ? "与最小字符数任一达到即折叠" : "Folds when this or the character floor is met",
+            h(NumberField, { value: draft.sentMinLines, min: 1, max: 100000, onChange: (v) => set("sentMinLines", v) })
         ),
         h(
             "div",
@@ -157,10 +201,10 @@ export function SettingsPage(): React.ReactElement {
                     style: {
                         height: "32px",
                         padding: "0 16px",
-                        border: "1px solid var(--dsw-alias-brand-primary)",
+                        border: "1px solid " + PRIMARY_FILL,
                         borderRadius: "8px",
-                        background: "var(--dsw-alias-brand-primary)",
-                        color: "#fff",
+                        background: PRIMARY_FILL,
+                        color: PRIMARY_INK,
                         fontSize: "13px",
                         cursor: "pointer"
                     }

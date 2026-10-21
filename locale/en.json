@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Collapse multiline paste",
-    "description": "Fold a multiline paste into one inline chip; click to expand or collapse, and send the full text unchanged."
+    "description": "Fold a multiline paste in the composer, and long sent messages, into one inline chip; click to expand or collapse, and send the full text unchanged."
   }
 }
