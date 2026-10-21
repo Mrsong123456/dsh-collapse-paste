@@ -62,6 +62,12 @@ interface Region {
 
 /** The live document: attached root, resolved editor, live regions. */
 const state = {
+    /**
+     * Monotonic mount id. Every `arm()` bumps it; a cleanup only acts while
+     * its own id is still current, so a delayed teardown from an earlier
+     * mount cannot disarm the engine a later mount just armed.
+     */
+    epoch: 0,
     /** Whether arm() has run and no dispose() has undone it yet. */
     armed: false,
     disposed: false,
@@ -74,6 +80,11 @@ const state = {
     pending: null as PendingPaste | null,
     quietTimer: null as ReturnType<typeof setTimeout> | null
 };
+
+/** The current mount id (diagnostics: which mount owns the engine now). */
+export function currentEpoch(): number {
+    return state.epoch;
+}
 
 /** Resolve the live editor + register the chip class once per root. */
 function bindEditor(root: HTMLElement): boolean {
@@ -599,8 +610,15 @@ function restoreComposer(): void {
     });
 }
 
-/** Tear down every listener and region. Safe to call twice. */
-export function dispose(): void {
+/**
+ * Tear down every listener and region. Safe to call twice.
+ *
+ * @param owner - the mount id this cleanup belongs to. A cleanup from an
+ *   earlier mount (its id is no longer current) is a no-op: the host may run
+ *   effect disposers late, after a re-enable already re-armed the engine.
+ */
+export function dispose(owner?: number): void {
+    if (owner !== undefined && owner !== state.epoch) return;
     if (state.disposed) return;
     state.disposed = true;
     state.armed = false;
@@ -624,9 +642,12 @@ export function dispose(): void {
  * module instance (no page reload, no fresh module), so `arm()` must clear the
  * terminal flags `dispose()`/`failOpen()` left behind. Without that, the
  * engine stayed inert for the rest of the page's life after one toggle.
+ *
+ * Returns the cleanup for THIS mount. It is bound to the mount id, so the
+ * older cleanup the host may still hold cannot tear down a newer arm.
  */
-export function arm(): void {
-    if (state.armed) return;
+export function arm(): () => void {
+    const owner = ++state.epoch;
     state.armed = true;
     state.disposed = false;
     state.failed = false;
@@ -637,7 +658,15 @@ export function arm(): void {
     setChipToggle(toggleChip);
     document.addEventListener("paste", onPasteCapture as EventListener, true);
     document.addEventListener("keydown", onKeyDown, true);
-    bodyObserver.observe(document.body, { childList: true, subtree: true });
-    const existing = document.querySelector(ROOT_SELECTOR);
-    if (existing !== null) attachRoot(existing as HTMLElement);
+    try {
+        bodyObserver.observe(document.body, { childList: true, subtree: true });
+        const existing = document.querySelector(ROOT_SELECTOR);
+        if (existing !== null) attachRoot(existing as HTMLElement);
+    } catch (error) {
+        // Do not leave the engine half-armed: no observer, no root, but a
+        // live paste listener and `armed` set would block the next arm().
+        dispose(owner);
+        throw error;
+    }
+    return () => dispose(owner);
 }

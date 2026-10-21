@@ -30,12 +30,26 @@ const CARD_ATTR = "data-cp-fold-card";
  */
 const DISPLAY_ATTR = "data-cp-display";
 
+/** Which fold instance owns a card or a hidden body. */
+const OWNER_ATTR = "data-cp-owner";
+
+/**
+ * Fold instances currently installed in this page. A delayed teardown must
+ * only touch nodes it owns; anything owned by an id still in this set belongs
+ * to a live sibling and is off limits.
+ */
+const liveFolds = new Set<string>();
+/** Each live instance's one-shot cleanup, so a new install can retire it. */
+const activeCleanups = new Map<string, () => void>();
+let foldSeq = 0;
+
 /** Put one body back exactly as it was, idempotently. */
 function restoreElement(el: HTMLElement): void {
     const previous = el.getAttribute(DISPLAY_ATTR);
     if (previous === null) return;
     el.style.display = previous;
     el.removeAttribute(DISPLAY_ATTR);
+    el.removeAttribute(OWNER_ATTR);
 }
 
 /** One folded row's DOM handles and last measured content. */
@@ -154,6 +168,19 @@ function setText(el: HTMLElement, value: string): void {
 
 /** Install the transcript fold; returns the disposer. */
 export function installTranscriptFold(): () => void {
+    const id = "cp" + (++foldSeq);
+    liveFolds.add(id);
+    // A new mount supersedes any instance still decorating the transcript
+    // (a re-applied plugin whose old cleanup was missed): retire it first so
+    // two folds never stack a second card pair on the same row.
+    for (const [otherId, otherCleanup] of Array.from(activeCleanups)) {
+        if (otherId === id) continue;
+        try {
+            otherCleanup();
+        } catch {
+            /* a stuck sibling must not block the new install */
+        }
+    }
     const expandedByKey = new Map<string, boolean>();
     const states = new WeakMap<HTMLElement, FoldState>();
     /**
@@ -168,6 +195,17 @@ export function installTranscriptFold(): () => void {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let pendingFull = true;
     let disposed = false;
+    /** Live observer/subscription; null until the setup at the end succeeded. */
+    let observer: MutationObserver | null = null;
+    let unsubscribeConfig: (() => void) | null = null;
+    let cleaned = false;
+
+    // Reclaim decoration left by instances that are no longer installed (a
+    // crashed install, a torn-down sibling whose cleanup ran late). Without
+    // this, a half-dead instance keeps a duplicated card pair and bodies it
+    // hid stay hidden under an owner nobody tracks.
+    healOrphans();
+    removeDeadCards();
 
     const style = document.createElement("style");
     style.dataset.plugin = "dsh-collapse-paste";
@@ -186,7 +224,14 @@ export function installTranscriptFold(): () => void {
         ".cp-fold-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
         ".cp-fold-hint{flex:none;opacity:.82;white-space:nowrap;}"
     ].join("");
-    document.head.appendChild(style);
+    try {
+        document.head.appendChild(style);
+    } catch (error) {
+        // Nothing else was created yet; drop the registration and let apply()
+        // report a failed mount instead of leaking a half-installed fold.
+        liveFolds.delete(id);
+        throw error;
+    }
 
     /** Content nodes this row must hide (body only; actions stay usable). */
     function hideTargets(row: HTMLElement): HTMLElement[] {
@@ -206,6 +251,7 @@ export function installTranscriptFold(): () => void {
             st.hidden.push(el);
             hiddenAll.add(el);
             el.setAttribute(DISPLAY_ATTR, el.style.display || "");
+            el.setAttribute(OWNER_ATTR, id);
             el.style.display = "none";
         }
     }
@@ -229,9 +275,11 @@ export function installTranscriptFold(): () => void {
     }
 
     /**
-     * Restore bodies marked as hidden that this instance is not tracking:
-     * leftovers from an instance that crashed or was torn down without being
-     * able to restore them (fail-open, plugin reload, cancelled teardown).
+     * Restore bodies marked as hidden whose owner is gone: leftovers from an
+     * instance that crashed, was torn down without being able to restore
+     * them, or belongs to an older version of this plugin. Bodies owned by a
+     * live sibling are never touched — that was how a late teardown used to
+     * un-hide the freshly installed fold.
      */
     function healOrphans(): void {
         let marked: HTMLElement[];
@@ -241,7 +289,25 @@ export function installTranscriptFold(): () => void {
             return;
         }
         for (const el of marked) {
-            if (!hiddenAll.has(el)) restoreElement(el);
+            if (hiddenAll.has(el)) continue;
+            const owner = el.getAttribute(OWNER_ATTR) || "";
+            if (owner !== "" && liveFolds.has(owner)) continue;
+            restoreElement(el);
+        }
+    }
+
+    /** Remove cards whose owning instance is no longer installed. */
+    function removeDeadCards(): void {
+        let cards: HTMLElement[];
+        try {
+            cards = Array.from(document.querySelectorAll<HTMLElement>("[" + CARD_ATTR + "]"));
+        } catch {
+            return;
+        }
+        for (const card of cards) {
+            const owner = card.getAttribute(CARD_ATTR) || "";
+            if (owner !== "" && liveFolds.has(owner)) continue;
+            card.remove();
         }
     }
 
@@ -267,7 +333,7 @@ export function installTranscriptFold(): () => void {
     function buildCards(row: HTMLElement): FoldState {
         const card = document.createElement("div");
         card.className = "cp-fold";
-        card.setAttribute(CARD_ATTR, "1");
+        card.setAttribute(CARD_ATTR, id);
         card.setAttribute("data-expanded", "0");
 
         const pill = document.createElement("button");
@@ -288,7 +354,7 @@ export function installTranscriptFold(): () => void {
 
         const endCard = document.createElement("div");
         endCard.className = "cp-fold cp-fold-end";
-        endCard.setAttribute(CARD_ATTR, "1");
+        endCard.setAttribute(CARD_ATTR, id);
         const endPill = document.createElement("button");
         endPill.type = "button";
         endPill.className = "cp-fold-pill";
@@ -428,23 +494,29 @@ export function installTranscriptFold(): () => void {
     function scan(full: boolean): void {
         timer = null;
         if (disposed) return;
-        healOrphans();
-        const config = getConfig();
-        let rows: HTMLElement[];
         try {
-            rows = full
-                ? Array.from(document.querySelectorAll<HTMLElement>(ROW_SELECTOR))
-                : Array.from(dirty).filter((row) => row.isConnected);
-        } catch {
-            return;
+            const config = getConfig();
+            let rows: HTMLElement[];
+            try {
+                rows = full
+                    ? Array.from(document.querySelectorAll<HTMLElement>(ROW_SELECTOR))
+                    : Array.from(dirty).filter((row) => row.isConnected);
+            } catch {
+                return;
+            }
+            dirty.clear();
+            for (const row of rows) {
+                if (!(row instanceof HTMLElement)) continue;
+                if (row.closest("[hidden]") !== null) continue;
+                processRow(row, config);
+            }
+            if (full) pruneExpanded();
+        } catch (error) {
+            // Fail-open: a fold that keeps throwing would leave a half-hidden
+            // transcript and an observer retrying forever. Undo this instance.
+            console.warn("[collapse-paste] transcript fold disabled:", error);
+            cleanup();
         }
-        dirty.clear();
-        for (const row of rows) {
-            if (!(row instanceof HTMLElement)) continue;
-            if (row.closest("[hidden]") !== null) continue;
-            processRow(row, config);
-        }
-        if (full) pruneExpanded();
     }
 
     /** Coalesce the mutation storm; a full pass supersedes dirty-row passes. */
@@ -459,49 +531,74 @@ export function installTranscriptFold(): () => void {
         }, 220);
     }
 
-    const observer = new MutationObserver((records) => {
-        let any = false;
-        for (const record of records) {
-            if (!relevant(record)) continue;
-            any = true;
-            const target = record.target;
-            const el = target instanceof Element ? target : target.parentElement;
-            // A change inside an existing row: reconsider that row only.
-            if (el !== null && el.closest(ROW_SELECTOR) !== null) markDirty(target);
-            // Newly inserted rows (or wrappers containing them): just those.
-            if (record.type === "childList") {
-                for (const node of Array.from(record.addedNodes)) markDirty(node);
-            }
-        }
-        if (any) schedule(false);
-    });
-    try {
-        observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-    } catch {
-        /* body unavailable */
-    }
-    const unsubscribeConfig = subscribeConfig(() => schedule(true));
-    schedule(true);
-
-    return () => {
+    /**
+     * Undo exactly this instance: its style, its observers and its own cards
+     * and bodies. One-shot, and never touches a sibling that is still live.
+     */
+    function cleanup(): void {
+        if (cleaned) return;
+        cleaned = true;
         disposed = true;
         if (timer !== null) clearTimeout(timer);
         timer = null;
-        try { observer.disconnect(); } catch { /* already gone */ }
-        try { unsubscribeConfig(); } catch { /* already gone */ }
+        try { observer?.disconnect(); } catch { /* already gone */ }
+        try { unsubscribeConfig?.(); } catch { /* already gone */ }
         try { style.remove(); } catch { /* already gone */ }
         // Restore by what we hid, not by what the row bookkeeping still
         // knows: a row whose state was dropped still has a hidden body.
         restoreAllHidden();
-        // Sweep anything a previous, less careful teardown left behind.
+        // Remove only our own cards; a sibling's stay untouched.
+        try {
+            const mine = "[" + CARD_ATTR + '="' + id + '"]';
+            for (const card of Array.from(document.querySelectorAll<HTMLElement>(mine))) card.remove();
+        } catch { /* document unavailable */ }
+        liveFolds.delete(id);
+        activeCleanups.delete(id);
+        // Reclaim anything whose owner is now gone (legacy or crashed folds).
         healOrphans();
-        // `states` is the fast path; the DOM sweep catches rows whose state
-        // entry is already gone.
-        for (const card of Array.from(document.querySelectorAll<HTMLElement>("[" + CARD_ATTR + "]"))) {
-            const row = card.parentElement;
-            const st = row ? states.get(row) : undefined;
-            if (st && row) removeCards(row, st);
-            else card.remove();
-        }
-    };
+    }
+
+    try {
+        observer = new MutationObserver((records) => {
+            if (disposed) return;
+            try {
+                let any = false;
+                for (const record of records) {
+                    if (!relevant(record)) continue;
+                    any = true;
+                    const target = record.target;
+                    const el = target instanceof Element ? target : target.parentElement;
+                    // A change inside an existing row: reconsider that row only.
+                    if (el !== null && el.closest(ROW_SELECTOR) !== null) markDirty(target);
+                    // Newly inserted rows (or wrappers containing them): just those.
+                    if (record.type === "childList") {
+                        for (const node of Array.from(record.addedNodes)) markDirty(node);
+                    }
+                }
+                if (any) schedule(false);
+            } catch (error) {
+                console.warn("[collapse-paste] transcript fold disabled:", error);
+                cleanup();
+            }
+        });
+    } catch (error) {
+        // No observer means no fold; undo the style instead of leaking it.
+        cleanup();
+        throw error;
+    }
+    try {
+        observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    } catch {
+        /* body unavailable: the fold stays registered but sees no mutations */
+    }
+    try {
+        unsubscribeConfig = subscribeConfig(() => schedule(true));
+    } catch (error) {
+        cleanup();
+        throw error;
+    }
+    activeCleanups.set(id, cleanup);
+    schedule(true);
+
+    return cleanup;
 }

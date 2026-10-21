@@ -21,13 +21,16 @@
  */
 import { LOCALE_NAMESPACE } from "./plugin-meta.js";
 import { DICTIONARIES } from "./locales/index.js";
-import { arm, dispose } from "./engine/engine.js";
+import { arm, currentEpoch } from "./engine/engine.js";
 import { bindLocale, bindScope, type SettingsScope } from "./engine/config.js";
 import { getConfig } from "./settings.js";
 import { SettingsPage } from "./settings-page.js";
 import { ensureComposerStyles } from "./styles/index.js";
 import { installTranscriptFold } from "./fold/transcript.js";
 import type { PluginContext } from "./types.js";
+
+/** How many times the host has applied this plugin in this page. */
+let applySeq = 0;
 
 /** The engine reads this scope on every paste, so saved changes apply live. */
 const LOCAL_SCOPE: SettingsScope = {
@@ -65,20 +68,30 @@ export function apply(ctx: PluginContext): void {
      * them.
      */
     const teardown: Array<() => void> = [];
+    /** This apply() call; late cleanups from an earlier call stay ignored. */
+    const instance = ++applySeq;
     /**
      * Register one mount as an effect and remember its cleanup, so the catch
      * below can run the same cleanups when the host will not (or not yet).
+     *
+     * The recorded cleanup is one-shot: the catch calls it, and a later
+     * effect disposal from the same (half-failed) fiber becomes a no-op
+     * instead of tearing down whatever a newer apply() mounted.
      */
     const mount = (exec: () => (() => void) | void, label: string): void => {
         ctx.effect(() => {
             const off = exec();
             if (typeof off !== "function") return undefined;
-            teardown.push(off);
-            return () => {
-                const index = teardown.indexOf(off);
+            let settled = false;
+            const cleanup = (): void => {
+                if (settled) return;
+                settled = true;
+                const index = teardown.indexOf(cleanup);
                 if (index >= 0) teardown.splice(index, 1);
                 off();
             };
+            teardown.push(cleanup);
+            return cleanup;
         }, label);
     };
     try {
@@ -86,10 +99,7 @@ export function apply(ctx: PluginContext): void {
         mount(() => ctx.locale.register(LOCALE_NAMESPACE, DICTIONARIES), "collapse-multiline: dictionaries");
         bindLocale(ctx.locale.bind(LOCALE_NAMESPACE));
         bindScope(LOCAL_SCOPE);
-        mount(() => {
-            arm();
-            return () => dispose();
-        }, "collapse-multiline: DOM engine");
+        mount(() => arm(), "collapse-multiline: DOM engine");
         mount(() => installTranscriptFold(), "collapse-paste: transcript fold");
         ctx.slots.inject("settings.section", () =>
             ctx.slots.register(
@@ -104,9 +114,11 @@ export function apply(ctx: PluginContext): void {
         );
         (window as unknown as Record<string, unknown>).__DSH_COLLAPSE_PASTE__ = {
             version: "0.2.3",
+            instance,
+            engineEpoch: currentEpoch(),
             armed: true
         };
-        console.info("[collapse-paste] armed");
+        console.info("[collapse-paste] armed", { instance });
     } catch (error) {
         // Fail-open: the composer and transcript keep their stock behaviour.
         // Unwind in reverse mount order so hidden transcript bodies come back
@@ -121,6 +133,8 @@ export function apply(ctx: PluginContext): void {
         }
         (window as unknown as Record<string, unknown>).__DSH_COLLAPSE_PASTE__ = {
             version: "0.2.3",
+            instance,
+            engineEpoch: currentEpoch(),
             armed: false,
             error: String(error)
         };
