@@ -62,6 +62,8 @@ interface Region {
 
 /** The live document: attached root, resolved editor, live regions. */
 const state = {
+    /** Whether arm() has run and no dispose() has undone it yet. */
+    armed: false,
     disposed: false,
     failed: false,
     root: null as HTMLElement | null,
@@ -597,10 +599,11 @@ function restoreComposer(): void {
     });
 }
 
-/** Tear down every listener and region. */
+/** Tear down every listener and region. Safe to call twice. */
 export function dispose(): void {
     if (state.disposed) return;
     state.disposed = true;
+    state.armed = false;
     // A folded draft must not outlive the plugin: reveal it before detaching.
     try {
         restoreComposer();
@@ -614,9 +617,23 @@ export function dispose(): void {
     document.removeEventListener("keydown", onKeyDown, true);
 }
 
-/** Arm the watcher: paste capture, observers, keydown guard, chip toggle. */
+/**
+ * Arm the watcher: paste capture, observers, keydown guard, chip toggle.
+ *
+ * Re-enabling the plugin in the same page re-runs `apply()` against this same
+ * module instance (no page reload, no fresh module), so `arm()` must clear the
+ * terminal flags `dispose()`/`failOpen()` left behind. Without that, the
+ * engine stayed inert for the rest of the page's life after one toggle.
+ */
 export function arm(): void {
-    if (state.disposed || state.failed) return;
+    if (state.armed) return;
+    state.armed = true;
+    state.disposed = false;
+    state.failed = false;
+    state.root = null;
+    state.editor = null;
+    state.chipClass = null;
+    state.pending = null;
     setChipToggle(toggleChip);
     document.addEventListener("paste", onPasteCapture as EventListener, true);
     document.addEventListener("keydown", onKeyDown, true);
