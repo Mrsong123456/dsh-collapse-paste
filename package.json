@@ -1,7 +1,7 @@
 {
   "name": "dsh-collapse-paste",
   "description": "Fold multiline pastes in the DSH composer into an inline chip, and long sent messages into a collapsible transcript row; the full text is always sent to the model unchanged.",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "author": "Mrsong123456",
   "repository": {
     "type": "git",
