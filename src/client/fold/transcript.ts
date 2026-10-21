@@ -260,9 +260,9 @@ export function installTranscriptFold(): () => void {
     function showContent(st: FoldState): void {
         for (const el of st.hidden) {
             hiddenAll.delete(el);
-            // A detached body keeps its marker; if React reattaches that node
-            // later, the orphan sweep in `scan()` restores it.
-            if (!el.isConnected) continue;
+            // Restore even a detached body: its marker must not survive into a
+            // later reattach, or the body reappears hidden under a live owner
+            // that `healOrphans()` deliberately leaves alone.
             restoreElement(el);
         }
         st.hidden = [];
